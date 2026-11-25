@@ -1,0 +1,75 @@
+"""REST endpoints for persistent long-term key-value memories."""
+
+from fastapi import APIRouter, Depends, HTTPException, Response, status
+from sqlalchemy.orm import Session
+
+from app.database.database import get_db
+from app.database.repositories import MemoryRepository
+from app.schemas.memory import MemoryCreate, MemoryListResponse, MemoryOut, MemoryUpdate
+
+router = APIRouter(prefix="/memories", tags=["Memories"])
+
+
+@router.get("", response_model=MemoryListResponse)
+def list_memories(db: Session = Depends(get_db)) -> MemoryListResponse:
+    """Return all stored long-term memories."""
+    repo = MemoryRepository(db)
+    memories = repo.list_all()
+    return MemoryListResponse(
+        memories=[MemoryOut.model_validate(m) for m in memories],
+        count=len(memories),
+    )
+
+
+@router.post("", response_model=MemoryOut, status_code=status.HTTP_201_CREATED)
+def create_or_update_memory(
+    payload: MemoryCreate,
+    db: Session = Depends(get_db),
+) -> MemoryOut:
+    """Save a memory entry, updating existing entries with the same normalized key."""
+    repo = MemoryRepository(db)
+    memory, _action = repo.upsert(key=payload.key, value=payload.value)
+    return MemoryOut.model_validate(memory)
+
+
+@router.patch("/{memory_id}", response_model=MemoryOut)
+def update_memory(
+    memory_id: int,
+    payload: MemoryUpdate,
+    db: Session = Depends(get_db),
+) -> MemoryOut:
+    """Update a memory entry's key or value by ID."""
+    if not payload.model_fields_set:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Provide key or value to update.",
+        )
+
+    repo = MemoryRepository(db)
+    try:
+        memory = repo.update_by_id(memory_id, key=payload.key, value=payload.value)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+
+    if memory is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Memory {memory_id} was not found.",
+        )
+    return MemoryOut.model_validate(memory)
+
+
+@router.delete("/{memory_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_memory(memory_id: int, db: Session = Depends(get_db)) -> Response:
+    """Delete a stored memory by ID."""
+    repo = MemoryRepository(db)
+    deleted = repo.delete(memory_id)
+    if not deleted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Memory {memory_id} was not found.",
+        )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
