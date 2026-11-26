@@ -83,7 +83,7 @@ def _extract_body(payload: dict[str, Any]) -> str:
 
 
 def _parse_headers(headers: list[dict[str, str]]) -> dict[str, str]:
-    wanted = {"from", "to", "subject", "date"}
+    wanted = {"from", "to", "subject", "date", "message-id", "references"}
     parsed: dict[str, str] = {}
     for item in headers:
         name = (item.get("name") or "").lower()
@@ -92,12 +92,22 @@ def _parse_headers(headers: list[dict[str, str]]) -> dict[str, str]:
     return parsed
 
 
+def _normalize_reply_subject(subject: str) -> str:
+    cleaned = subject.strip()
+    if not cleaned:
+        return "Re: (no subject)"
+    if re.match(r"^re\s*:", cleaned, flags=re.IGNORECASE):
+        return cleaned
+    return f"Re: {cleaned}"
+
+
 def _summarize_message(msg: dict[str, Any], *, include_body: bool) -> dict[str, Any]:
     payload = msg.get("payload") or {}
     headers = _parse_headers(payload.get("headers") or [])
     result: dict[str, Any] = {
         "message_id": msg.get("id"),
         "thread_id": msg.get("threadId"),
+        "rfc_message_id": headers.get("message-id", ""),
         "from": headers.get("from", ""),
         "to": headers.get("to", ""),
         "subject": headers.get("subject", "(no subject)"),
@@ -132,6 +142,84 @@ class GmailService:
     def __init__(self, service: Any) -> None:
         self._service = service
 
+    def _resolve_reply_headers(
+        self,
+        *,
+        thread_id: str | None,
+        in_reply_to: str | None,
+    ) -> tuple[str | None, str | None, str | None]:
+        """Look up latest RFC Message-ID, References, and Subject in thread_id if needed."""
+        resolved_reply_to = in_reply_to.strip() if in_reply_to else None
+        resolved_references: str | None = resolved_reply_to
+        parent_subject: str | None = None
+
+        if not thread_id:
+            return resolved_reply_to, resolved_references, parent_subject
+
+        try:
+            thread = (
+                self._service.users()
+                .threads()
+                .get(
+                    userId="me",
+                    id=thread_id,
+                    format="metadata",
+                    metadataHeaders=["Message-ID", "References", "Subject"],
+                )
+                .execute()
+            )
+            messages = thread.get("messages") or []
+            if messages:
+                last_headers = _parse_headers(
+                    (messages[-1].get("payload") or {}).get("headers") or []
+                )
+                parent_msg_id = last_headers.get("message-id") or None
+                parent_refs = last_headers.get("references") or None
+                parent_subject = last_headers.get("subject") or None
+
+                if not resolved_reply_to and parent_msg_id:
+                    resolved_reply_to = parent_msg_id
+
+                if parent_refs and resolved_reply_to and resolved_reply_to not in parent_refs:
+                    resolved_references = f"{parent_refs} {resolved_reply_to}".strip()
+                elif parent_refs:
+                    resolved_references = parent_refs
+                else:
+                    resolved_references = resolved_reply_to
+        except Exception:
+            # Best-effort metadata enrichment; sending with threadId still proceeds.
+            pass
+
+        return resolved_reply_to, resolved_references, parent_subject
+
+    def _build_mime(
+        self,
+        *,
+        to: str,
+        subject: str,
+        body: str,
+        thread_id: str | None = None,
+        in_reply_to: str | None = None,
+    ) -> tuple[str, str]:
+        resolved_reply_to, resolved_refs, parent_subject = self._resolve_reply_headers(
+            thread_id=thread_id,
+            in_reply_to=in_reply_to,
+        )
+        effective_subject = subject
+        if thread_id:
+            effective_subject = _normalize_reply_subject(subject or parent_subject or "")
+
+        mime = EmailMessage()
+        mime["To"] = to
+        mime["Subject"] = effective_subject
+        if resolved_reply_to:
+            mime["In-Reply-To"] = resolved_reply_to
+        if resolved_refs:
+            mime["References"] = resolved_refs
+        mime.set_content(body)
+        raw = base64.urlsafe_b64encode(mime.as_bytes()).decode("ascii")
+        return raw, effective_subject
+
     def search_emails(self, query: str, max_results: int = 5) -> dict[str, Any]:
         limit = max(1, min(int(max_results), 20))
         try:
@@ -151,7 +239,7 @@ class GmailService:
                         userId="me",
                         id=ref["id"],
                         format="metadata",
-                        metadataHeaders=["From", "To", "Subject", "Date"],
+                        metadataHeaders=["From", "To", "Subject", "Date", "Message-ID"],
                     )
                     .execute()
                 )
@@ -210,25 +298,39 @@ class GmailService:
         except HttpError as exc:
             raise _handle_http_error(exc) from exc
 
-    def create_draft(self, *, to: str, subject: str, body: str) -> dict[str, Any]:
-        mime = EmailMessage()
-        mime["To"] = to
-        mime["Subject"] = subject
-        mime.set_content(body)
-        raw = base64.urlsafe_b64encode(mime.as_bytes()).decode("ascii")
+    def create_draft(
+        self,
+        *,
+        to: str,
+        subject: str,
+        body: str,
+        thread_id: str | None = None,
+        in_reply_to: str | None = None,
+    ) -> dict[str, Any]:
+        raw, effective_subject = self._build_mime(
+            to=to,
+            subject=subject,
+            body=body,
+            thread_id=thread_id,
+            in_reply_to=in_reply_to,
+        )
+        draft_message: dict[str, Any] = {"raw": raw}
+        if thread_id:
+            draft_message["threadId"] = thread_id
         try:
             draft = (
                 self._service.users()
                 .drafts()
-                .create(userId="me", body={"message": {"raw": raw}})
+                .create(userId="me", body={"message": draft_message})
                 .execute()
             )
             return {
                 "status": "draft_created",
                 "draft_id": draft.get("id"),
                 "message_id": (draft.get("message") or {}).get("id"),
+                "thread_id": (draft.get("message") or {}).get("threadId") or thread_id,
                 "to": to,
-                "subject": subject,
+                "subject": effective_subject,
             }
         except HttpError as exc:
             raise _handle_http_error(exc) from exc
@@ -240,12 +342,15 @@ class GmailService:
         subject: str,
         body: str,
         thread_id: str | None = None,
+        in_reply_to: str | None = None,
     ) -> dict[str, Any]:
-        mime = EmailMessage()
-        mime["To"] = to
-        mime["Subject"] = subject
-        mime.set_content(body)
-        raw = base64.urlsafe_b64encode(mime.as_bytes()).decode("ascii")
+        raw, effective_subject = self._build_mime(
+            to=to,
+            subject=subject,
+            body=body,
+            thread_id=thread_id,
+            in_reply_to=in_reply_to,
+        )
         payload: dict[str, Any] = {"raw": raw}
         if thread_id:
             payload["threadId"] = thread_id
@@ -259,9 +364,9 @@ class GmailService:
             return {
                 "status": "sent",
                 "message_id": sent.get("id"),
-                "thread_id": sent.get("threadId"),
+                "thread_id": sent.get("threadId") or thread_id,
                 "to": to,
-                "subject": subject,
+                "subject": effective_subject,
             }
         except HttpError as exc:
             raise _handle_http_error(exc) from exc

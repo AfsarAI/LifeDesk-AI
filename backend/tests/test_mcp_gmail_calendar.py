@@ -204,3 +204,128 @@ def test_real_mcp_stdio_discovery_and_browser_policy() -> None:
         validate_navigation_url("file:///etc/passwd", policy)
     with pytest.raises(ValueError):
         validate_navigation_url("https://evil.example.com/", policy)
+
+
+def test_gmail_reply_threading_sets_thread_id_and_reply_headers() -> None:
+    sent_payloads: list[dict[str, Any]] = []
+    draft_payloads: list[dict[str, Any]] = []
+
+    thread_response = {
+        "id": "thread_abc",
+        "messages": [
+            {
+                "id": "msg_parent",
+                "threadId": "thread_abc",
+                "payload": {
+                    "headers": [
+                        {"name": "From", "value": "Rahul <rahul@example.com>"},
+                        {"name": "Subject", "value": "Meeting Today"},
+                        {"name": "Message-ID", "value": "<parent-001@mail.gmail.com>"},
+                        {"name": "References", "value": "<root-000@mail.gmail.com>"},
+                    ]
+                },
+            }
+        ],
+    }
+
+    fake_google = SimpleNamespace(
+        users=lambda: SimpleNamespace(
+            threads=lambda: SimpleNamespace(get=lambda **_kw: FakeExec(thread_response)),
+            messages=lambda: SimpleNamespace(
+                get=lambda **_kw: FakeExec(thread_response["messages"][0]),
+                send=lambda *, body, **_kw: (
+                    sent_payloads.append(body),
+                    FakeExec({"id": "sent_reply_1", "threadId": body.get("threadId", "new")}),
+                )[1],
+            ),
+            drafts=lambda: SimpleNamespace(
+                create=lambda *, body, **_kw: (
+                    draft_payloads.append(body),
+                    FakeExec({"id": "draft_reply_1", "message": {"id": "dm1", "threadId": body["message"].get("threadId")}}),
+                )[1]
+            ),
+        )
+    )
+
+    gmail = GmailService(fake_google)
+
+    # 1. Reading the email surfaces rfc_message_id and thread_id.
+    fetched = gmail.get_email("msg_parent")
+    assert fetched["email"]["thread_id"] == "thread_abc"
+    assert fetched["email"]["rfc_message_id"] == "<parent-001@mail.gmail.com>"
+
+    # 2. Replying passes threadId and sets In-Reply-To / References + single Re: prefix.
+    sent = gmail.send_email(
+        to="rahul@example.com",
+        subject="Meeting Today",
+        body="Confirmed for 6 PM IST.",
+        thread_id="thread_abc",
+    )
+    assert sent["thread_id"] == "thread_abc"
+    assert sent["subject"] == "Re: Meeting Today"
+    assert sent_payloads[0]["threadId"] == "thread_abc"
+    raw_mime = base64.urlsafe_b64decode(sent_payloads[0]["raw"] + "==").decode("utf-8")
+    assert "In-Reply-To: <parent-001@mail.gmail.com>" in raw_mime
+    assert "References: <root-000@mail.gmail.com> <parent-001@mail.gmail.com>" in raw_mime
+    assert "Subject: Re: Meeting Today" in raw_mime
+
+    # 3. Draft reply also attaches threadId without duplicating Re:.
+    draft = gmail.create_draft(
+        to="rahul@example.com",
+        subject="Re: Meeting Today",
+        body="Draft reply",
+        thread_id="thread_abc",
+    )
+    assert draft["thread_id"] == "thread_abc"
+    assert draft["subject"] == "Re: Meeting Today"
+    assert draft_payloads[0]["message"]["threadId"] == "thread_abc"
+
+    # 4. Standalone email without thread_id sends cleanly without threadId.
+    standalone = gmail.send_email(
+        to="someone@example.com",
+        subject="Hello",
+        body="Standalone message",
+    )
+    assert standalone["status"] == "sent"
+    assert "threadId" not in sent_payloads[1]
+
+
+def test_calendar_timezone_resolution_on_create_and_update() -> None:
+    inserted: list[dict[str, Any]] = []
+    patched: list[dict[str, Any]] = []
+
+    class FakeEvents:
+        def list(self, **_kw: Any) -> FakeExec:
+            return FakeExec({"items": []})
+
+        def insert(self, *, body: dict[str, Any], **_kw: Any) -> FakeExec:
+            inserted.append(body)
+            return FakeExec({"id": "ev_ist_1", **body})
+
+        def patch(self, *, body: dict[str, Any], **_kw: Any) -> FakeExec:
+            patched.append(body)
+            return FakeExec({"id": "ev_ist_1", "summary": "Sync", **body})
+
+    cal = CalendarService(
+        SimpleNamespace(events=lambda: FakeEvents()),
+        user_timezone="Asia/Kolkata",
+    )
+    created = cal.create_event(
+        title="Evening Sync",
+        start_datetime="2026-11-26T18:00:00",
+        end_datetime="2026-11-26T19:00:00",
+    )
+    assert created["status"] == "created"
+    assert inserted[0]["start"] == {
+        "dateTime": "2026-11-26T18:00:00+05:30",
+        "timeZone": "Asia/Kolkata",
+    }
+
+    updated = cal.update_event(
+        event_id="ev_ist_1",
+        start_datetime="2026-11-26T18:30:00",
+        end_datetime="2026-11-26T19:30:00",
+    )
+    assert updated["status"] == "updated"
+    assert patched[0]["start"]["dateTime"] == "2026-11-26T18:30:00+05:30"
+    assert patched[0]["end"]["timeZone"] == "Asia/Kolkata"

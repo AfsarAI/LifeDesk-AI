@@ -5,7 +5,7 @@ import logging
 import time
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from sqlalchemy.orm import Session
 
 from app.agent.tool_registry import TOOL_REGISTRY as NATIVE_TOOL_REGISTRY
@@ -40,6 +40,11 @@ class GmailSearchArgs(BaseModel):
     query: str = Field(..., min_length=1, max_length=300)
     max_results: int = Field(default=5, ge=1, le=20)
 
+    @field_validator("max_results", mode="before")
+    @classmethod
+    def default_max_results_if_none(cls, v: Any) -> Any:
+        return 5 if v is None else v
+
     @field_validator("query")
     @classmethod
     def clean_query(cls, v: str) -> str:
@@ -58,6 +63,11 @@ class GmailListRecentArgs(BaseModel):
     model_config = ConfigDict(extra="forbid")
     max_results: int = Field(default=5, ge=1, le=20)
 
+    @field_validator("max_results", mode="before")
+    @classmethod
+    def default_max_results_if_none(cls, v: Any) -> Any:
+        return 5 if v is None else v
+
 
 class GmailGetThreadArgs(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -69,6 +79,24 @@ class GmailCreateDraftArgs(BaseModel):
     to: str = Field(..., min_length=3, max_length=320)
     subject: str = Field(..., min_length=1, max_length=300)
     body: str = Field(..., min_length=1, max_length=10000)
+    thread_id: str | None = Field(default=None, max_length=200)
+    in_reply_to: str | None = Field(default=None, max_length=300)
+
+    @field_validator("thread_id", "in_reply_to", mode="before")
+    @classmethod
+    def blank_optional_to_none(cls, v: Any) -> Any:
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_thread_alias(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "threadId" in data and "thread_id" not in data:
+            copied = dict(data)
+            copied["thread_id"] = copied.pop("threadId")
+            return copied
+        return data
 
 
 class GmailSendEmailArgs(BaseModel):
@@ -77,6 +105,23 @@ class GmailSendEmailArgs(BaseModel):
     subject: str = Field(..., min_length=1, max_length=300)
     body: str = Field(..., min_length=1, max_length=10000)
     thread_id: str | None = Field(default=None, max_length=200)
+    in_reply_to: str | None = Field(default=None, max_length=300)
+
+    @field_validator("thread_id", "in_reply_to", mode="before")
+    @classmethod
+    def blank_optional_to_none(cls, v: Any) -> Any:
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_thread_alias(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "threadId" in data and "thread_id" not in data:
+            copied = dict(data)
+            copied["thread_id"] = copied.pop("threadId")
+            return copied
+        return data
 
 
 class CalendarListCalendarsArgs(BaseModel):
@@ -120,6 +165,20 @@ class CalendarUpdateEventArgs(BaseModel):
     end_datetime: str | None = Field(default=None, min_length=4, max_length=100)
     attendees: list[str] | None = Field(default=None, max_length=50)
 
+    @model_validator(mode="after")
+    def require_at_least_one_field(self) -> "CalendarUpdateEventArgs":
+        if (
+            self.title is None
+            and self.description is None
+            and self.start_datetime is None
+            and self.end_datetime is None
+            and self.attendees is None
+        ):
+            raise ValueError(
+                "Provide at least one field to update (title, description, start_datetime, end_datetime, or attendees)."
+            )
+        return self
+
 
 class CalendarDeleteEventArgs(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -160,7 +219,7 @@ def _build_mcp_tool_definitions() -> dict[str, UnifiedToolDefinition]:
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "Gmail search query."},
-                    "max_results": {"type": "integer", "description": "Max emails to return (1-20)."},
+                    "max_results": {"type": ["integer", "null"], "description": "Max emails to return (1-20)."},
                 },
                 "required": ["query"],
                 "additionalProperties": False,
@@ -192,7 +251,7 @@ def _build_mcp_tool_definitions() -> dict[str, UnifiedToolDefinition]:
             parameters={
                 "type": "object",
                 "properties": {
-                    "max_results": {"type": "integer", "description": "Max emails to return (1-20)."},
+                    "max_results": {"type": ["integer", "null"], "description": "Max emails to return (1-20)."},
                 },
                 "required": [],
                 "additionalProperties": False,
@@ -220,13 +279,24 @@ def _build_mcp_tool_definitions() -> dict[str, UnifiedToolDefinition]:
         ),
         UnifiedToolDefinition(
             name="gmail_create_draft",
-            description="Create a Gmail draft without sending it.",
+            description=(
+                "Create a Gmail draft without sending it. When drafting a reply to an existing email, "
+                "include thread_id (and in_reply_to if known) from the original message."
+            ),
             parameters={
                 "type": "object",
                 "properties": {
                     "to": {"type": "string", "description": "Recipient email address."},
                     "subject": {"type": "string", "description": "Email subject."},
                     "body": {"type": "string", "description": "Email body text."},
+                    "thread_id": {
+                        "type": ["string", "null"],
+                        "description": "Original Gmail thread_id when replying in an existing thread.",
+                    },
+                    "in_reply_to": {
+                        "type": ["string", "null"],
+                        "description": "Optional RFC Message-ID header of the message being replied to.",
+                    },
                 },
                 "required": ["to", "subject", "body"],
                 "additionalProperties": False,
@@ -239,8 +309,9 @@ def _build_mcp_tool_definitions() -> dict[str, UnifiedToolDefinition]:
         UnifiedToolDefinition(
             name="gmail_send_email",
             description=(
-                "Propose sending an email via Gmail. Always requires explicit human approval "
-                "before the email is actually sent."
+                "Propose sending an email via Gmail (requires explicit user approval before sending). "
+                "When replying to an existing email, ALWAYS pass `thread_id` (and `in_reply_to` if "
+                "available) from the searched/read message and use a `Re:` subject."
             ),
             parameters={
                 "type": "object",
@@ -248,7 +319,14 @@ def _build_mcp_tool_definitions() -> dict[str, UnifiedToolDefinition]:
                     "to": {"type": "string", "description": "Recipient email address."},
                     "subject": {"type": "string", "description": "Email subject."},
                     "body": {"type": "string", "description": "Exact email body to send."},
-                    "thread_id": {"type": "string", "description": "Optional Gmail thread ID for replies."},
+                    "thread_id": {
+                        "type": ["string", "null"],
+                        "description": "Original Gmail thread_id when replying in an existing thread.",
+                    },
+                    "in_reply_to": {
+                        "type": ["string", "null"],
+                        "description": "Optional RFC Message-ID header of the email being replied to.",
+                    },
                 },
                 "required": ["to", "subject", "body"],
                 "additionalProperties": False,
@@ -348,9 +426,9 @@ def _build_mcp_tool_definitions() -> dict[str, UnifiedToolDefinition]:
                     "title": {"type": "string", "description": "Event title."},
                     "start_datetime": {"type": "string", "description": "ISO-8601 start datetime."},
                     "end_datetime": {"type": "string", "description": "ISO-8601 end datetime."},
-                    "description": {"type": "string", "description": "Optional event description."},
+                    "description": {"type": ["string", "null"], "description": "Optional event description."},
                     "attendees": {
-                        "type": "array",
+                        "type": ["array", "null"],
                         "items": {"type": "string"},
                         "description": "Optional attendee email addresses.",
                     },
@@ -374,11 +452,11 @@ def _build_mcp_tool_definitions() -> dict[str, UnifiedToolDefinition]:
                 "type": "object",
                 "properties": {
                     "event_id": {"type": "string", "description": "Event ID to update."},
-                    "title": {"type": "string"},
-                    "description": {"type": "string"},
-                    "start_datetime": {"type": "string"},
-                    "end_datetime": {"type": "string"},
-                    "attendees": {"type": "array", "items": {"type": "string"}},
+                    "title": {"type": ["string", "null"]},
+                    "description": {"type": ["string", "null"]},
+                    "start_datetime": {"type": ["string", "null"]},
+                    "end_datetime": {"type": ["string", "null"]},
+                    "attendees": {"type": ["array", "null"], "items": {"type": "string"}},
                 },
                 "required": ["event_id"],
                 "additionalProperties": False,
@@ -416,12 +494,10 @@ def _build_mcp_tool_definitions() -> dict[str, UnifiedToolDefinition]:
 
 def _summarize_approval_action(tool_name: str, payload: dict[str, Any]) -> str:
     if tool_name == "gmail_send_email":
-        return f"Send email to {payload.get('to')} — Subject: {payload.get('subject')}"
+        verb = "Reply in thread to" if payload.get("thread_id") else "Send email to"
+        return f"{verb} {payload.get('to')} — Subject: {payload.get('subject')}"
     if tool_name == "calendar_create_event":
-        return (
-            f"Create calendar event '{payload.get('title')}' "
-            f"({payload.get('start_datetime')} to {payload.get('end_datetime')})"
-        )
+        return f"Create calendar event '{payload.get('title')}'"
     if tool_name == "calendar_update_event":
         return f"Update calendar event {payload.get('event_id')}"
     if tool_name == "calendar_delete_event":
@@ -664,6 +740,30 @@ class UnifiedToolExecutor:
 
         # Approval-gated MCP actions NEVER execute immediately inside the LLM loop.
         if tool_def.requires_approval:
+            if tool_name in ("calendar_create_event", "calendar_update_event"):
+                from app.mcp_servers.calendar_service import CalendarServiceError, parse_iso_datetime
+
+                try:
+                    start_raw = validated_dict.get("start_datetime")
+                    end_raw = validated_dict.get("end_datetime")
+                    start_dt = parse_iso_datetime(start_raw, user.timezone) if start_raw else None
+                    end_dt = parse_iso_datetime(end_raw, user.timezone) if end_raw else None
+                    if start_dt and end_dt and end_dt <= start_dt:
+                        raise CalendarServiceError(
+                            "end_datetime must be after start_datetime.",
+                            status_code=400,
+                        )
+                except CalendarServiceError as exc:
+                    exec_repo.record(
+                        conversation_id=conversation_id,
+                        tool_name=tool_name,
+                        tool_source="mcp",
+                        status="error",
+                        duration_ms=int((time.perf_counter() - started) * 1000),
+                        safe_error_summary=str(exc),
+                    )
+                    return False, {"status": "error", "error": str(exc)}, "mcp", None
+
             summary = _summarize_approval_action(tool_name, validated_dict)
             approval_out = self.approval_service.stage_approval(
                 db,
@@ -691,9 +791,11 @@ class UnifiedToolExecutor:
                     "summary": summary,
                     "action_payload": validated_dict,
                     "message": (
-                        "This action requires explicit user approval and has been queued in the UI. "
-                        "Tell the user what is proposed and ask them to approve or reject it. "
-                        "Do NOT claim it has already been sent or created."
+                        f"Action staged for explicit user approval (approval_id={approval_out.id}). "
+                        "If the user's request includes additional actions (for example sending an email, "
+                        "updating/creating another event, or managing tasks), continue calling the remaining "
+                        "tools now before writing your final response. Do NOT claim staged actions have "
+                        "already been executed."
                     ),
                 },
                 "mcp",

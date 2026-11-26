@@ -73,11 +73,11 @@ TOOL_REGISTRY: dict[str, RegisteredTool] = {
             "properties": {
                 "title": {"type": "string", "description": "Concise title of the task."},
                 "due_date": {
-                    "type": "string",
+                    "type": ["string", "null"],
                     "description": "Optional due date or deadline (e.g., '2026-11-30' or 'tomorrow').",
                 },
                 "description": {
-                    "type": "string",
+                    "type": ["string", "null"],
                     "description": "Optional extra details about the task.",
                 },
             },
@@ -94,8 +94,8 @@ TOOL_REGISTRY: dict[str, RegisteredTool] = {
             "type": "object",
             "properties": {
                 "status": {
-                    "type": "string",
-                    "enum": ["pending", "completed"],
+                    "type": ["string", "null"],
+                    "enum": ["pending", "completed", None],
                     "description": "Optional status filter. Omit to list all tasks.",
                 },
             },
@@ -112,9 +112,9 @@ TOOL_REGISTRY: dict[str, RegisteredTool] = {
             "type": "object",
             "properties": {
                 "task_id": {"type": "integer", "description": "Numeric ID of the task to update."},
-                "title": {"type": "string", "description": "Updated task title."},
-                "due_date": {"type": "string", "description": "Updated due date."},
-                "description": {"type": "string", "description": "Updated task description."},
+                "title": {"type": ["string", "null"], "description": "Updated task title."},
+                "due_date": {"type": ["string", "null"], "description": "Updated due date."},
+                "description": {"type": ["string", "null"], "description": "Updated task description."},
             },
             "required": ["task_id"],
             "additionalProperties": False,
@@ -184,7 +184,7 @@ TOOL_REGISTRY: dict[str, RegisteredTool] = {
             "type": "object",
             "properties": {
                 "key": {
-                    "type": "string",
+                    "type": ["string", "null"],
                     "description": "Optional key to look up. Omit to return all saved memories.",
                 },
             },
@@ -206,7 +206,7 @@ TOOL_REGISTRY: dict[str, RegisteredTool] = {
                     "description": "ISO datetime or readable schedule string (e.g. '2026-11-27T09:00:00').",
                 },
                 "task_id": {
-                    "type": "integer",
+                    "type": ["integer", "null"],
                     "description": "Optional linked LifeDesk task ID.",
                 },
             },
@@ -223,8 +223,8 @@ TOOL_REGISTRY: dict[str, RegisteredTool] = {
             "type": "object",
             "properties": {
                 "status": {
-                    "type": "string",
-                    "enum": ["pending", "triggered", "dismissed"],
+                    "type": ["string", "null"],
+                    "enum": ["pending", "triggered", "dismissed", None],
                     "description": "Optional reminder status filter.",
                 },
             },
@@ -249,13 +249,14 @@ TOOL_REGISTRY: dict[str, RegisteredTool] = {
     "request_user_approval": RegisteredTool(
         name="request_user_approval",
         description=(
-            "Explicitly stage a custom sensitive action for human confirmation before execution."
+            "Stage a custom internal confirmation request only when no built-in Gmail or Calendar "
+            "approval-gated tool applies (do NOT call this for gmail_send_email or calendar_*)."
         ),
         parameters={
             "type": "object",
             "properties": {
                 "action_type": {"type": "string", "description": "Short action identifier."},
-                "provider": {"type": "string", "description": "Target provider (e.g. 'internal')."},
+                "provider": {"type": ["string", "null"], "description": "Target provider (e.g. 'internal')."},
                 "tool_name": {"type": "string", "description": "Target tool name."},
                 "summary": {
                     "type": "string",

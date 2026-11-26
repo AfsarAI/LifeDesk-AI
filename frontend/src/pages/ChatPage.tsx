@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   Bot,
@@ -11,13 +11,13 @@ import {
   X,
 } from "lucide-react";
 import { ApprovalCard } from "../components/ApprovalCard";
-import { ToolCallList } from "../components/ToolCallList";
+import { getRecordApprovalId, ToolCallList } from "../components/ToolCallList";
 import type { Approval, ChatMessage } from "../types/api";
 
 interface ChatPageProps {
   messages: ChatMessage[];
-  pendingApprovals: Approval[];
-  recentApprovals: Approval[];
+  approvals: Approval[];
+  userTimezone?: string;
   isLoading: boolean;
   error: string | null;
   onDismissError: () => void;
@@ -43,8 +43,8 @@ const STARTER_PROMPTS = [
 
 export function ChatPage({
   messages,
-  pendingApprovals,
-  recentApprovals,
+  approvals,
+  userTimezone = "UTC",
   isLoading,
   error,
   onDismissError,
@@ -60,14 +60,38 @@ export function ChatPage({
   const endRef = useRef<HTMLDivElement | null>(null);
 
   const visibleMessages = messages.filter((m) => m.role === "user" || m.role === "assistant");
-  const displayedApprovals = [
-    ...pendingApprovals,
-    ...recentApprovals.filter((r) => !pendingApprovals.some((p) => p.id === r.id)),
-  ].slice(0, 5);
+
+  const approvalsById = useMemo(
+    () => new Map<number, Approval>(approvals.map((a) => [a.id, a])),
+    [approvals]
+  );
+
+  // Track which pending approvals are already rendered inline under their assistant turn.
+  const matchedPendingIds = useMemo(() => {
+    const ids = new Set<number>();
+    for (const msg of visibleMessages) {
+      if (msg.role !== "assistant") continue;
+      for (const call of msg.tool_calls) {
+        const id = getRecordApprovalId(call);
+        if (id !== null) ids.add(id);
+      }
+    }
+    return ids;
+  }, [visibleMessages]);
+
+  const unmatchedPendingApprovals = useMemo(
+    () => approvals.filter((a) => a.status === "PENDING" && !matchedPendingIds.has(a.id)),
+    [approvals, matchedPendingIds]
+  );
+
+  const pendingCount = useMemo(
+    () => approvals.filter((a) => a.status === "PENDING").length,
+    [approvals]
+  );
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [visibleMessages.length, displayedApprovals.length, isLoading]);
+  }, [visibleMessages.length, pendingCount, isLoading]);
 
   async function handleSubmit() {
     const trimmed = input.trim();
@@ -123,7 +147,7 @@ export function ChatPage({
       )}
 
       <div className="flex-1 space-y-5 overflow-y-auto px-5 py-5">
-        {visibleMessages.length === 0 && displayedApprovals.length === 0 ? (
+        {visibleMessages.length === 0 && unmatchedPendingApprovals.length === 0 ? (
           <div className="mx-auto flex max-w-2xl flex-col items-center justify-center py-12 text-center">
             <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-500/15 text-indigo-400 ring-1 ring-indigo-500/30">
               <Sparkles className="h-6 w-6" />
@@ -151,6 +175,23 @@ export function ChatPage({
           <div className="mx-auto max-w-3xl space-y-5">
             {visibleMessages.map((msg) => {
               const isUser = msg.role === "user";
+
+              // Only PENDING approvals render inline cards under their corresponding message turn.
+              // Once approved/rejected/executed, they disappear and ToolCallList shows the resolved pill.
+              const turnPendingApprovals: Approval[] = [];
+              if (!isUser) {
+                const seenIds = new Set<number>();
+                for (const call of msg.tool_calls) {
+                  const aid = getRecordApprovalId(call);
+                  if (aid === null || seenIds.has(aid)) continue;
+                  seenIds.add(aid);
+                  const approval = approvalsById.get(aid);
+                  if (approval && approval.status === "PENDING") {
+                    turnPendingApprovals.push(approval);
+                  }
+                }
+              }
+
               return (
                 <div
                   key={msg.id}
@@ -161,21 +202,35 @@ export function ChatPage({
                       <Bot className="h-4 w-4" />
                     </div>
                   )}
-                  <div
-                    className={`max-w-[82%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
-                      isUser
-                        ? "bg-indigo-600 text-white"
-                        : "border border-slate-800 bg-slate-900/90 text-slate-100"
-                    }`}
-                  >
-                    {!isUser && (
-                      <ToolCallList
-                        toolCalls={msg.tool_calls}
-                        onOpenIntegrations={onOpenIntegrations}
-                      />
-                    )}
-                    <p className="whitespace-pre-wrap">{msg.content}</p>
-                  </div>
+
+                  {isUser ? (
+                    <div className="max-w-[82%] rounded-2xl bg-indigo-600 px-4 py-3 text-sm leading-relaxed text-white">
+                      <p className="whitespace-pre-wrap">{msg.content}</p>
+                    </div>
+                  ) : (
+                    <div className="min-w-0 max-w-[82%] flex-1 space-y-2.5">
+                      <div className="rounded-2xl border border-slate-800 bg-slate-900/90 px-4 py-3 text-sm leading-relaxed text-slate-100">
+                        <ToolCallList
+                          toolCalls={msg.tool_calls}
+                          approvalsById={approvalsById}
+                          userTimezone={userTimezone}
+                          onOpenIntegrations={onOpenIntegrations}
+                        />
+                        <p className="whitespace-pre-wrap">{msg.content}</p>
+                      </div>
+                      {turnPendingApprovals.map((approval) => (
+                        <ApprovalCard
+                          key={approval.id}
+                          approval={approval}
+                          userTimezone={userTimezone}
+                          onApprove={onApproveAction}
+                          onReject={onRejectAction}
+                          onEditDraft={onEditDraftApproval}
+                        />
+                      ))}
+                    </div>
+                  )}
+
                   {isUser && (
                     <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-slate-800 text-slate-300 ring-1 ring-slate-700">
                       <User className="h-4 w-4" />
@@ -185,17 +240,21 @@ export function ChatPage({
               );
             })}
 
-            {displayedApprovals.length > 0 && (
-              <div className="space-y-3 pt-2">
-                {displayedApprovals.map((approval) => (
-                  <ApprovalCard
-                    key={approval.id}
-                    approval={approval}
-                    onApprove={onApproveAction}
-                    onReject={onRejectAction}
-                    onEditDraft={onEditDraftApproval}
-                  />
-                ))}
+            {unmatchedPendingApprovals.length > 0 && (
+              <div className="flex justify-start gap-3">
+                <div className="w-8 shrink-0" />
+                <div className="min-w-0 max-w-[82%] flex-1 space-y-2.5">
+                  {unmatchedPendingApprovals.map((approval) => (
+                    <ApprovalCard
+                      key={approval.id}
+                      approval={approval}
+                      userTimezone={userTimezone}
+                      onApprove={onApproveAction}
+                      onReject={onRejectAction}
+                      onEditDraft={onEditDraftApproval}
+                    />
+                  ))}
+                </div>
               </div>
             )}
 

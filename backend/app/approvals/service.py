@@ -106,6 +106,12 @@ class ApprovalService:
     ) -> ApprovalOut:
         """Create a PENDING approval bound strictly to user_id and exact action_payload."""
         repo = ApprovalRepository(db, user_id=user_id)
+        if tool_name in ("calendar_create_event", "calendar_update_event", "calendar_delete_event"):
+            repo.cancel_matching_pending_for_conversation(
+                conversation_id=conversation_id,
+                tool_name=tool_name,
+                new_payload=action_payload,
+            )
         approval = repo.create(
             conversation_id=conversation_id,
             provider=provider,

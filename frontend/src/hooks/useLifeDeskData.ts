@@ -58,6 +58,16 @@ export function useLifeDeskData() {
     setPendingApprovalCount(res.pending_count);
   }, []);
 
+  const upsertApproval = useCallback((updated: Approval) => {
+    setApprovals((prev) => {
+      const next = prev.some((item) => item.id === updated.id)
+        ? prev.map((item) => (item.id === updated.id ? updated : item))
+        : [updated, ...prev];
+      setPendingApprovalCount(next.filter((item) => item.status === "PENDING").length);
+      return next;
+    });
+  }, []);
+
   const refreshAuth = useCallback(async () => {
     const [me, allUsers] = await Promise.all([apiClient.getMe(), apiClient.listUsers()]);
     setCurrentUser(me);
@@ -122,6 +132,7 @@ export function useLifeDeskData() {
     refreshConversations,
     refreshIntegrations,
     refreshApprovals,
+    upsertApproval,
     refreshAuth,
     refreshHealth,
     refreshAll,

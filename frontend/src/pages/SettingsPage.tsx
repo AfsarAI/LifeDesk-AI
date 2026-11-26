@@ -1,4 +1,4 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import {
   CheckCircle2,
   Clock,
@@ -40,6 +40,16 @@ export function SettingsPage({
 }: SettingsPageProps) {
   const llm = health?.llm;
   const [timezone, setTimezone] = useState(currentUser?.timezone || "UTC");
+  const timezoneOptions =
+    currentUser?.timezone && !COMMON_TIMEZONES.includes(currentUser.timezone)
+      ? [currentUser.timezone, ...COMMON_TIMEZONES]
+      : COMMON_TIMEZONES;
+
+  useEffect(() => {
+    if (currentUser?.timezone) {
+      setTimezone(currentUser.timezone);
+    }
+  }, [currentUser?.timezone]);
   const [newName, setNewName] = useState("");
   const [newEmail, setNewEmail] = useState("");
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
@@ -179,7 +189,7 @@ export function SettingsPage({
               onChange={(e) => setTimezone(e.target.value)}
               className="rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-white"
             >
-              {COMMON_TIMEZONES.map((tz) => (
+              {timezoneOptions.map((tz) => (
                 <option key={tz} value={tz}>
                   {tz}
                 </option>

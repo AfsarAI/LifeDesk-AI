@@ -6,8 +6,10 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
 import json
+import os
 import threading
 import time
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import Depends, Header, HTTPException, status
 from sqlalchemy.orm import Session
@@ -82,13 +84,19 @@ def get_current_user(
         return user
 
     if settings.allow_demo_user_fallback:
+        configured_tz = settings.default_timezone
+        try:
+            ZoneInfo(configured_tz)
+        except ZoneInfoNotFoundError:
+            configured_tz = "UTC"
+
         demo_user = db.query(User).filter(User.id == 1).first()
         if demo_user is None:
             demo_user = User(
                 id=1,
                 name="LifeDesk User",
                 email="demo@lifedesk.local",
-                timezone=settings.default_timezone,
+                timezone=configured_tz,
             )
             db.add(demo_user)
             db.commit()

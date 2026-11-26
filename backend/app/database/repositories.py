@@ -635,6 +635,56 @@ class ApprovalRepository:
         self.db.refresh(approval)
         return approval
 
+    def cancel_matching_pending_for_conversation(
+        self,
+        *,
+        conversation_id: int | None,
+        tool_name: str,
+        new_payload: dict[str, Any],
+    ) -> int:
+        """Cancel older PENDING approvals only when the new proposal supersedes the same target."""
+        if conversation_id is None:
+            return 0
+        pending = (
+            self.db.query(Approval)
+            .filter(
+                Approval.user_id == self.user_id,
+                Approval.conversation_id == conversation_id,
+                Approval.tool_name == tool_name,
+                Approval.status == "PENDING",
+            )
+            .all()
+        )
+        cancelled = 0
+        new_title = str(new_payload.get("title") or "").strip().lower()
+        new_start = str(new_payload.get("start_datetime") or "").strip()
+        new_event_id = str(new_payload.get("event_id") or "").strip()
+
+        for row in pending:
+            try:
+                old_payload = json.loads(row.action_payload)
+            except Exception:
+                old_payload = {}
+
+            is_same_target = False
+            if tool_name == "calendar_create_event":
+                old_title = str(old_payload.get("title") or "").strip().lower()
+                old_start = str(old_payload.get("start_datetime") or "").strip()
+                if (new_title and old_title == new_title) or (new_start and old_start == new_start):
+                    is_same_target = True
+            elif tool_name in ("calendar_update_event", "calendar_delete_event"):
+                old_event_id = str(old_payload.get("event_id") or "").strip()
+                if new_event_id and old_event_id == new_event_id:
+                    is_same_target = True
+
+            if is_same_target:
+                row.status = "CANCELLED"
+                cancelled += 1
+
+        if cancelled:
+            self.db.commit()
+        return cancelled
+
 
 class ToolExecutionRepository:
     """Stores safe audit records of native and MCP tool invocations."""

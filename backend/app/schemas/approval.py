@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class ApprovalOut(BaseModel):
@@ -49,3 +49,10 @@ class RequestUserApprovalArgs(BaseModel):
     tool_name: str = Field(..., min_length=1, max_length=80)
     summary: str = Field(..., min_length=1, max_length=500)
     action_payload: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("provider", mode="before")
+    @classmethod
+    def default_provider_if_none(cls, value: Any) -> Any:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return "internal"
+        return value

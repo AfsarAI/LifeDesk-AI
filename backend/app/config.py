@@ -28,7 +28,7 @@ class Settings(BaseModel):
     openrouter_model: str = Field(default="openrouter/free", min_length=1)
 
     database_url: str = Field(default="sqlite:///./lifedesk.db", min_length=1)
-    max_tool_iterations: int = Field(default=5, ge=1, le=10)
+    max_tool_iterations: int = Field(default=8, ge=1, le=15)
     frontend_url: str = Field(default="http://localhost:5173", min_length=1)
     cors_origins: list[str] = Field(
         default_factory=lambda: [
@@ -80,7 +80,7 @@ def _parse_bool(raw_value: str | None, default: bool) -> bool:
 def get_settings() -> Settings:
     """Load and cache application settings from environment variables."""
     provider_raw = os.getenv("LLM_PROVIDER", "groq").strip().lower() or "groq"
-    max_iter_raw = os.getenv("MAX_TOOL_ITERATIONS", "5").strip() or "5"
+    max_iter_raw = os.getenv("MAX_TOOL_ITERATIONS", "8").strip() or "8"
     frontend_url = (
         os.getenv("FRONTEND_URL", "http://localhost:5173").strip().rstrip("/")
         or "http://localhost:5173"

@@ -57,10 +57,22 @@ def gmail_get_thread(thread_id: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-def gmail_create_draft(to: str, subject: str, body: str) -> dict[str, Any]:
-    """Create a Gmail draft without sending it."""
+def gmail_create_draft(
+    to: str,
+    subject: str,
+    body: str,
+    thread_id: str | None = None,
+    in_reply_to: str | None = None,
+) -> dict[str, Any]:
+    """Create a Gmail draft without sending it. Pass thread_id when drafting a reply."""
     try:
-        return _get_service().create_draft(to=to, subject=subject, body=body)
+        return _get_service().create_draft(
+            to=to,
+            subject=subject,
+            body=body,
+            thread_id=thread_id,
+            in_reply_to=in_reply_to,
+        )
     except GmailServiceError as exc:
         return {"status": "error", "error": str(exc), "code": exc.status_code}
 
@@ -71,10 +83,17 @@ def gmail_send_email(
     subject: str,
     body: str,
     thread_id: str | None = None,
+    in_reply_to: str | None = None,
 ) -> dict[str, Any]:
     """Send an email via Gmail (must only be invoked after explicit user approval)."""
     try:
-        return _get_service().send_email(to=to, subject=subject, body=body, thread_id=thread_id)
+        return _get_service().send_email(
+            to=to,
+            subject=subject,
+            body=body,
+            thread_id=thread_id,
+            in_reply_to=in_reply_to,
+        )
     except GmailServiceError as exc:
         return {"status": "error", "error": str(exc), "code": exc.status_code}
 

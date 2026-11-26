@@ -1,7 +1,9 @@
 """SQLAlchemy engine, non-destructive SQLite migrations, and session dependencies."""
 
+import os
 from collections.abc import Generator
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import Engine, create_engine, event, text
 from sqlalchemy.orm import Session, sessionmaker
@@ -116,6 +118,12 @@ def init_db(target_engine: Engine | None = None) -> None:
         bind=active_engine, autocommit=False, autoflush=False, class_=Session
     )
     with session_factory() as db:
+        configured_tz = get_settings().default_timezone
+        try:
+            ZoneInfo(configured_tz)
+        except ZoneInfoNotFoundError:
+            configured_tz = "UTC"
+
         demo_user = db.query(User).filter(User.id == 1).first()
         if demo_user is None:
             db.add(
@@ -123,9 +131,12 @@ def init_db(target_engine: Engine | None = None) -> None:
                     id=1,
                     name="LifeDesk User",
                     email="demo@lifedesk.local",
-                    timezone=get_settings().default_timezone,
+                    timezone=configured_tz,
                 )
             )
+            db.commit()
+        elif os.getenv("USER_TIMEZONE") and demo_user.timezone == "UTC" and configured_tz != "UTC":
+            demo_user.timezone = configured_tz
             db.commit()
 
 

@@ -32,6 +32,7 @@ export default function App() {
     refreshConversations,
     refreshIntegrations,
     refreshApprovals,
+    upsertApproval,
     refreshHealth,
     refreshAll,
   } = useLifeDeskData();
@@ -104,6 +105,9 @@ export default function App() {
     try {
       const res = await apiClient.sendChat(text, activeConversationId);
       setActiveConversationId(res.conversation_id);
+      for (const item of res.pending_approvals) {
+        upsertApproval(item);
+      }
 
       const history = await apiClient.getConversationMessages(res.conversation_id);
       setMessages(history.messages);
@@ -126,7 +130,14 @@ export default function App() {
   async function handleApproveAction(approvalId: number) {
     setChatError(null);
     try {
-      await apiClient.approveAction(approvalId);
+      const res = await apiClient.approveAction(approvalId);
+      upsertApproval(res.approval);
+      if (
+        res.approval.status === "FAILED" &&
+        typeof res.approval.execution_result?.error === "string"
+      ) {
+        setChatError(res.approval.execution_result.error);
+      }
       await Promise.all([refreshApprovals(), refreshIntegrations()]);
     } catch (err) {
       setChatError(err instanceof ApiError ? err.message : "Failed to approve action.");
@@ -136,7 +147,8 @@ export default function App() {
   async function handleRejectAction(approvalId: number) {
     setChatError(null);
     try {
-      await apiClient.rejectAction(approvalId);
+      const res = await apiClient.rejectAction(approvalId);
+      upsertApproval(res.approval);
       await refreshApprovals();
     } catch (err) {
       setChatError(err instanceof ApiError ? err.message : "Failed to reject action.");
@@ -148,7 +160,8 @@ export default function App() {
     edited: { to: string; subject: string; body: string }
   ) {
     setChatError(null);
-    await apiClient.rejectAction(approval.id);
+    const rejected = await apiClient.rejectAction(approval.id);
+    upsertApproval(rejected.approval);
     await refreshApprovals();
     await handleSendMessage(
       `Create a Gmail draft (or propose sending with new approval) to ${edited.to} with subject "${edited.subject}" and body:\n${edited.body}`
@@ -157,8 +170,11 @@ export default function App() {
 
   const displayedError = chatError || backendError;
   const connectedIntegrationCount = integrations.filter((i) => i.status === "connected").length;
-  const pendingApprovals = approvals.filter((a) => a.status === "PENDING");
-  const recentApprovals = approvals.filter((a) => a.status !== "PENDING");
+  const conversationApprovals = approvals.filter((a) =>
+    activeConversationId === null
+      ? a.status === "PENDING"
+      : a.conversation_id === activeConversationId
+  );
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-slate-950 text-slate-100">
@@ -198,8 +214,8 @@ export default function App() {
             <>
               <ChatPage
                 messages={messages}
-                pendingApprovals={pendingApprovals}
-                recentApprovals={recentApprovals}
+                approvals={conversationApprovals}
+                userTimezone={currentUser?.timezone}
                 isLoading={chatLoading}
                 error={displayedError}
                 onDismissError={() => {
