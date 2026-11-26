@@ -6,3 +6,60 @@
       Roboto, sans-serif;
   }
 }
+
+/* Dark-theme syntax highlighting tokens for rehype-highlight inside chat code blocks */
+.hljs {
+  color: #e2e8f0;
+}
+.hljs-comment,
+.hljs-quote {
+  color: #64748b;
+  font-style: italic;
+}
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-subst {
+  color: #c084fc;
+}
+.hljs-string,
+.hljs-doctag,
+.hljs-addition {
+  color: #86efac;
+}
+.hljs-number,
+.hljs-literal,
+.hljs-variable,
+.hljs-template-variable,
+.hljs-tag .hljs-attr {
+  color: #fbbf24;
+}
+.hljs-title,
+.hljs-section,
+.hljs-selector-id,
+.hljs-title.function_ {
+  color: #93c5fd;
+}
+.hljs-type,
+.hljs-class .hljs-title,
+.hljs-title.class_,
+.hljs-built_in {
+  color: #67e8f9;
+}
+.hljs-attr,
+.hljs-attribute,
+.hljs-property {
+  color: #a5b4fc;
+}
+.hljs-symbol,
+.hljs-bullet,
+.hljs-link {
+  color: #f472b6;
+}
+.hljs-deletion {
+  color: #fca5a5;
+}
+.hljs-meta,
+.hljs-operator,
+.hljs-punctuation {
+  color: #94a3b8;
+}

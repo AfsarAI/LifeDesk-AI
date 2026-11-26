@@ -11,6 +11,7 @@ import {
   X,
 } from "lucide-react";
 import { ApprovalCard } from "../components/ApprovalCard";
+import { MarkdownMessage } from "../components/MarkdownMessage";
 import { getRecordApprovalId, ToolCallList } from "../components/ToolCallList";
 import type { Approval, ChatMessage } from "../types/api";
 
@@ -216,7 +217,7 @@ export function ChatPage({
                           userTimezone={userTimezone}
                           onOpenIntegrations={onOpenIntegrations}
                         />
-                        <p className="whitespace-pre-wrap">{msg.content}</p>
+                        {msg.content && <MarkdownMessage content={msg.content} />}
                       </div>
                       {turnPendingApprovals.map((approval) => (
                         <ApprovalCard
