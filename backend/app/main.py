@@ -7,7 +7,16 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import chat, conversations, health, memories, tasks
+from app.api.routes import (
+    approvals,
+    auth,
+    chat,
+    conversations,
+    health,
+    integrations,
+    memories,
+    tasks,
+)
 from app.config import get_settings
 from app.database.database import init_db
 
@@ -44,6 +53,9 @@ def create_app() -> FastAPI:
     )
 
     application.include_router(health.router, prefix="/api")
+    application.include_router(auth.router, prefix="/api")
+    application.include_router(integrations.router, prefix="/api")
+    application.include_router(approvals.router, prefix="/api")
     application.include_router(chat.router, prefix="/api")
     application.include_router(tasks.router, prefix="/api")
     application.include_router(memories.router, prefix="/api")

@@ -5,15 +5,19 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.schemas.approval import ApprovalOut
+
 
 class ToolExecutionRecord(BaseModel):
     """Audit record returned to the frontend for a backend-executed tool."""
 
     call_id: str
     tool_name: str
+    tool_source: str = "native"
     arguments: dict[str, Any]
     success: bool
     result: dict[str, Any]
+    approval_id: int | None = None
 
 
 class ChatRequest(BaseModel):
@@ -40,6 +44,29 @@ class ChatResponse(BaseModel):
     model: str
     iterations_used: int
     tool_calls: list[ToolExecutionRecord] = Field(default_factory=list)
+    pending_approvals: list[ApprovalOut] = Field(default_factory=list)
+
+
+class ToolExecutionLogOut(BaseModel):
+    """Safe audit entry returned by GET /api/tool-executions."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    conversation_id: int | None = None
+    tool_name: str
+    tool_source: str
+    status: str
+    duration_ms: int
+    safe_error_summary: str | None = None
+    created_at: datetime
+
+
+class ToolExecutionListResponse(BaseModel):
+    """Response payload for GET /api/tool-executions."""
+
+    executions: list[ToolExecutionLogOut]
+    count: int
 
 
 class ConversationOut(BaseModel):

@@ -1,19 +1,30 @@
-"""Explicitly registered tool definitions, JSON schemas, and safe dispatcher."""
+"""Native tool registry and safe dispatcher for internal LifeDesk capabilities."""
 
 from dataclasses import dataclass
+import inspect
 import logging
 from typing import Any, Callable
 
 from pydantic import BaseModel, ValidationError
 from sqlalchemy.orm import Session
 
+from app.schemas.approval import RequestUserApprovalArgs
 from app.schemas.memory import RetrieveMemoryArgs, SaveMemoryArgs
 from app.schemas.task import (
     CompleteTaskArgs,
+    CreateReminderArgs,
     CreateTaskArgs,
+    GetUserPreferencesArgs,
+    ListRemindersArgs,
     ListTasksArgs,
     SearchTasksArgs,
     UpdateTaskArgs,
+)
+from app.tools.extra_tools import (
+    create_reminder_tool,
+    get_user_preferences_tool,
+    list_reminders_tool,
+    request_user_approval_tool,
 )
 from app.tools.memory_tools import retrieve_memory_tool, save_memory_tool
 from app.tools.task_tools import (
@@ -29,13 +40,13 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class RegisteredTool:
-    """Definition and handler for an explicitly allowed agent tool."""
+    """Definition and handler for an explicitly allowed native agent tool."""
 
     name: str
     description: str
     parameters: dict[str, Any]
     input_schema: type[BaseModel]
-    handler: Callable[[Session, Any], dict[str, Any]]
+    handler: Callable[..., dict[str, Any]]
 
     def to_openai_tool(self) -> dict[str, Any]:
         """Convert to OpenAI Chat Completions tool schema."""
@@ -49,21 +60,18 @@ class RegisteredTool:
         }
 
 
-# Security boundary: only tools registered here may be executed by the agent.
+# Security boundary: only native tools registered here may be executed internally.
 TOOL_REGISTRY: dict[str, RegisteredTool] = {
     "create_task": RegisteredTool(
         name="create_task",
         description=(
-            "Create a new task in the database. Use only when the user clearly asks to "
+            "Create a new LifeDesk task in the database. Use only when the user clearly asks to "
             "create, add, or schedule a task and provides a task title."
         ),
         parameters={
             "type": "object",
             "properties": {
-                "title": {
-                    "type": "string",
-                    "description": "Concise title of the task.",
-                },
+                "title": {"type": "string", "description": "Concise title of the task."},
                 "due_date": {
                     "type": "string",
                     "description": "Optional due date or deadline (e.g., '2026-11-30' or 'tomorrow').",
@@ -81,7 +89,7 @@ TOOL_REGISTRY: dict[str, RegisteredTool] = {
     ),
     "list_tasks": RegisteredTool(
         name="list_tasks",
-        description="List all stored tasks, optionally filtered by status ('pending' or 'completed').",
+        description="List stored LifeDesk tasks, optionally filtered by status ('pending' or 'completed').",
         parameters={
             "type": "object",
             "properties": {
@@ -103,22 +111,10 @@ TOOL_REGISTRY: dict[str, RegisteredTool] = {
         parameters={
             "type": "object",
             "properties": {
-                "task_id": {
-                    "type": "integer",
-                    "description": "Numeric ID of the task to update.",
-                },
-                "title": {
-                    "type": "string",
-                    "description": "Updated task title.",
-                },
-                "due_date": {
-                    "type": "string",
-                    "description": "Updated due date.",
-                },
-                "description": {
-                    "type": "string",
-                    "description": "Updated task description.",
-                },
+                "task_id": {"type": "integer", "description": "Numeric ID of the task to update."},
+                "title": {"type": "string", "description": "Updated task title."},
+                "due_date": {"type": "string", "description": "Updated due date."},
+                "description": {"type": "string", "description": "Updated task description."},
             },
             "required": ["task_id"],
             "additionalProperties": False,
@@ -145,14 +141,11 @@ TOOL_REGISTRY: dict[str, RegisteredTool] = {
     ),
     "search_tasks": RegisteredTool(
         name="search_tasks",
-        description="Search tasks whose title or description matches a text query.",
+        description="Search LifeDesk tasks whose title or description matches a text query.",
         parameters={
             "type": "object",
             "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "Search keyword or phrase.",
-                },
+                "query": {"type": "string", "description": "Search keyword or phrase."},
             },
             "required": ["query"],
             "additionalProperties": False,
@@ -173,10 +166,7 @@ TOOL_REGISTRY: dict[str, RegisteredTool] = {
                     "type": "string",
                     "description": "Short snake_case key identifying the preference or fact.",
                 },
-                "value": {
-                    "type": "string",
-                    "description": "The preference or fact value to remember.",
-                },
+                "value": {"type": "string", "description": "The preference or fact value to remember."},
             },
             "required": ["key", "value"],
             "additionalProperties": False,
@@ -204,11 +194,89 @@ TOOL_REGISTRY: dict[str, RegisteredTool] = {
         input_schema=RetrieveMemoryArgs,
         handler=retrieve_memory_tool,
     ),
+    "create_reminder": RegisteredTool(
+        name="create_reminder",
+        description="Create a persistent reminder for the user at a specified date/time.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "What to remind the user about."},
+                "remind_at": {
+                    "type": "string",
+                    "description": "ISO datetime or readable schedule string (e.g. '2026-11-27T09:00:00').",
+                },
+                "task_id": {
+                    "type": "integer",
+                    "description": "Optional linked LifeDesk task ID.",
+                },
+            },
+            "required": ["title", "remind_at"],
+            "additionalProperties": False,
+        },
+        input_schema=CreateReminderArgs,
+        handler=create_reminder_tool,
+    ),
+    "list_reminders": RegisteredTool(
+        name="list_reminders",
+        description="List stored reminders for the user, optionally filtered by status.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "enum": ["pending", "triggered", "dismissed"],
+                    "description": "Optional reminder status filter.",
+                },
+            },
+            "required": [],
+            "additionalProperties": False,
+        },
+        input_schema=ListRemindersArgs,
+        handler=list_reminders_tool,
+    ),
+    "get_user_preferences": RegisteredTool(
+        name="get_user_preferences",
+        description="Retrieve the user's configured timezone, profile name, and saved preferences.",
+        parameters={
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False,
+        },
+        input_schema=GetUserPreferencesArgs,
+        handler=get_user_preferences_tool,
+    ),
+    "request_user_approval": RegisteredTool(
+        name="request_user_approval",
+        description=(
+            "Explicitly stage a custom sensitive action for human confirmation before execution."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "action_type": {"type": "string", "description": "Short action identifier."},
+                "provider": {"type": "string", "description": "Target provider (e.g. 'internal')."},
+                "tool_name": {"type": "string", "description": "Target tool name."},
+                "summary": {
+                    "type": "string",
+                    "description": "Clear human-readable summary of the proposed action.",
+                },
+                "action_payload": {
+                    "type": "object",
+                    "description": "Exact JSON payload awaiting user approval.",
+                },
+            },
+            "required": ["action_type", "tool_name", "summary", "action_payload"],
+            "additionalProperties": False,
+        },
+        input_schema=RequestUserApprovalArgs,
+        handler=request_user_approval_tool,
+    ),
 }
 
 
 def get_openai_tools() -> list[dict[str, Any]]:
-    """Return OpenAI tool definitions for all registered tools."""
+    """Return OpenAI tool definitions for all registered native tools."""
     return [tool.to_openai_tool() for tool in TOOL_REGISTRY.values()]
 
 
@@ -216,8 +284,11 @@ def execute_registered_tool(
     db: Session,
     tool_name: str,
     raw_arguments: Any,
+    *,
+    user_id: int = 1,
+    conversation_id: int | None = None,
 ) -> tuple[bool, dict[str, Any]]:
-    """Validate tool name and arguments, execute the handler, and return (success, payload)."""
+    """Validate native tool name and arguments, execute handler, and return (success, payload)."""
     tool = TOOL_REGISTRY.get(tool_name)
     if tool is None:
         logger.warning("tool_rejected name=%s reason=unregistered", tool_name)
@@ -243,7 +314,13 @@ def execute_registered_tool(
         }
 
     try:
-        result = tool.handler(db, validated_args)
+        sig = inspect.signature(tool.handler)
+        kwargs: dict[str, Any] = {}
+        if "user_id" in sig.parameters:
+            kwargs["user_id"] = user_id
+        if "conversation_id" in sig.parameters:
+            kwargs["conversation_id"] = conversation_id
+        result = tool.handler(db, validated_args, **kwargs)
     except Exception as exc:
         logger.exception("tool_failed name=%s", tool_name)
         return False, {

@@ -3,12 +3,13 @@ import {
   CheckSquare,
   Cpu,
   MessageSquare,
+  Plug,
   Plus,
   Settings,
   Sparkles,
   X,
 } from "lucide-react";
-import type { Conversation, HealthResponse, NavPage } from "../types/api";
+import type { Conversation, HealthResponse, NavPage, UserProfile } from "../types/api";
 
 interface SidebarProps {
   activePage: NavPage;
@@ -19,6 +20,9 @@ interface SidebarProps {
   onNewChat: () => void;
   pendingTaskCount: number;
   memoryCount: number;
+  connectedIntegrationCount: number;
+  pendingApprovalCount: number;
+  currentUser: UserProfile | null;
   health: HealthResponse | null;
   mobileOpen: boolean;
   onCloseMobile: () => void;
@@ -33,6 +37,9 @@ export function Sidebar({
   onNewChat,
   pendingTaskCount,
   memoryCount,
+  connectedIntegrationCount,
+  pendingApprovalCount,
+  currentUser,
   health,
   mobileOpen,
   onCloseMobile,
@@ -43,9 +50,20 @@ export function Sidebar({
     icon: typeof MessageSquare;
     badge?: number;
   }> = [
-    { id: "chat", label: "Chat", icon: MessageSquare },
+    {
+      id: "chat",
+      label: "Chat",
+      icon: MessageSquare,
+      badge: pendingApprovalCount > 0 ? pendingApprovalCount : undefined,
+    },
     { id: "tasks", label: "Tasks", icon: CheckSquare, badge: pendingTaskCount },
     { id: "memory", label: "Memory", icon: Brain, badge: memoryCount },
+    {
+      id: "integrations",
+      label: "Integrations",
+      icon: Plug,
+      badge: connectedIntegrationCount,
+    },
     { id: "settings", label: "Settings", icon: Settings },
   ];
 
@@ -60,7 +78,7 @@ export function Sidebar({
           </div>
           <div>
             <h1 className="text-sm font-semibold tracking-tight text-white">LifeDesk AI</h1>
-            <p className="text-xs text-slate-400">Personal Agent</p>
+            <p className="text-xs text-slate-400">Personal Chief of Staff</p>
           </div>
         </div>
         <button
@@ -111,7 +129,13 @@ export function Sidebar({
                 {item.label}
               </span>
               {typeof item.badge === "number" && (
-                <span className="rounded-full bg-slate-800 px-2 py-0.5 text-xs text-slate-300 ring-1 ring-slate-700">
+                <span
+                  className={`rounded-full px-2 py-0.5 text-xs ring-1 ${
+                    item.id === "chat"
+                      ? "bg-amber-500/15 text-amber-300 ring-amber-500/30"
+                      : "bg-slate-800 text-slate-300 ring-slate-700"
+                  }`}
+                >
                   {item.badge}
                 </span>
               )}
@@ -154,7 +178,15 @@ export function Sidebar({
         </div>
       </div>
 
-      <div className="border-t border-slate-800 p-3">
+      <div className="space-y-2 border-t border-slate-800 p-3">
+        {currentUser && (
+          <div className="flex items-center justify-between px-1 text-[11px] text-slate-400">
+            <span className="truncate font-medium text-slate-300">
+              {currentUser.name || currentUser.email || `User #${currentUser.id}`}
+            </span>
+            <span className="font-mono text-slate-500">{currentUser.timezone}</span>
+          </div>
+        )}
         <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-2.5">
           <div className="flex items-center gap-2 text-xs font-medium text-slate-300">
             <Cpu className="h-3.5 w-3.5 text-indigo-400" />

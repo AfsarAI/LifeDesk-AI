@@ -1,19 +1,24 @@
-"""REST endpoints for persistent long-term key-value memories."""
+"""REST endpoints for persistent user-scoped long-term memories."""
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
 from app.database.database import get_db
+from app.database.models import User
 from app.database.repositories import MemoryRepository
 from app.schemas.memory import MemoryCreate, MemoryListResponse, MemoryOut, MemoryUpdate
+from app.security.auth import get_current_user
 
 router = APIRouter(prefix="/memories", tags=["Memories"])
 
 
 @router.get("", response_model=MemoryListResponse)
-def list_memories(db: Session = Depends(get_db)) -> MemoryListResponse:
-    """Return all stored long-term memories."""
-    repo = MemoryRepository(db)
+def list_memories(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> MemoryListResponse:
+    """Return all stored long-term memories for the authenticated user."""
+    repo = MemoryRepository(db, user_id=current_user.id)
     memories = repo.list_all()
     return MemoryListResponse(
         memories=[MemoryOut.model_validate(m) for m in memories],
@@ -24,10 +29,11 @@ def list_memories(db: Session = Depends(get_db)) -> MemoryListResponse:
 @router.post("", response_model=MemoryOut, status_code=status.HTTP_201_CREATED)
 def create_or_update_memory(
     payload: MemoryCreate,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> MemoryOut:
     """Save a memory entry, updating existing entries with the same normalized key."""
-    repo = MemoryRepository(db)
+    repo = MemoryRepository(db, user_id=current_user.id)
     memory, _action = repo.upsert(key=payload.key, value=payload.value)
     return MemoryOut.model_validate(memory)
 
@@ -36,16 +42,17 @@ def create_or_update_memory(
 def update_memory(
     memory_id: int,
     payload: MemoryUpdate,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> MemoryOut:
-    """Update a memory entry's key or value by ID."""
+    """Update a user-owned memory entry's key or value by ID."""
     if not payload.model_fields_set:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Provide key or value to update.",
         )
 
-    repo = MemoryRepository(db)
+    repo = MemoryRepository(db, user_id=current_user.id)
     try:
         memory = repo.update_by_id(memory_id, key=payload.key, value=payload.value)
     except ValueError as exc:
@@ -63,9 +70,13 @@ def update_memory(
 
 
 @router.delete("/{memory_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_memory(memory_id: int, db: Session = Depends(get_db)) -> Response:
-    """Delete a stored memory by ID."""
-    repo = MemoryRepository(db)
+def delete_memory(
+    memory_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Delete a user-owned memory by ID."""
+    repo = MemoryRepository(db, user_id=current_user.id)
     deleted = repo.delete(memory_id)
     if not deleted:
         raise HTTPException(

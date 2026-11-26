@@ -1,12 +1,27 @@
 import { useCallback, useEffect, useState } from "react";
 import { apiClient, ApiError } from "../services/apiClient";
-import type { Conversation, HealthResponse, Memory, Task } from "../types/api";
+import type {
+  Approval,
+  Conversation,
+  HealthResponse,
+  IntegrationCard,
+  Memory,
+  Task,
+  UserProfile,
+} from "../types/api";
 
 export function useLifeDeskData() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [taskCounts, setTaskCounts] = useState({ total: 0, pending: 0, completed: 0 });
   const [memories, setMemories] = useState<Memory[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [integrations, setIntegrations] = useState<IntegrationCard[]>([]);
+  const [oauthConfigured, setOauthConfigured] = useState(false);
+  const [encryptionConfigured, setEncryptionConfigured] = useState(false);
+  const [approvals, setApprovals] = useState<Approval[]>([]);
+  const [pendingApprovalCount, setPendingApprovalCount] = useState(0);
+  const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
+  const [users, setUsers] = useState<UserProfile[]>([]);
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [backendError, setBackendError] = useState<string | null>(null);
 
@@ -30,6 +45,25 @@ export function useLifeDeskData() {
     setConversations(res.conversations);
   }, []);
 
+  const refreshIntegrations = useCallback(async () => {
+    const res = await apiClient.listIntegrations();
+    setIntegrations(res.integrations);
+    setOauthConfigured(res.oauth_configured);
+    setEncryptionConfigured(res.encryption_configured);
+  }, []);
+
+  const refreshApprovals = useCallback(async () => {
+    const res = await apiClient.listApprovals();
+    setApprovals(res.approvals);
+    setPendingApprovalCount(res.pending_count);
+  }, []);
+
+  const refreshAuth = useCallback(async () => {
+    const [me, allUsers] = await Promise.all([apiClient.getMe(), apiClient.listUsers()]);
+    setCurrentUser(me);
+    setUsers(allUsers.users);
+  }, []);
+
   const refreshHealth = useCallback(async () => {
     const res = await apiClient.getHealth();
     setHealth(res);
@@ -39,9 +73,12 @@ export function useLifeDeskData() {
     try {
       await Promise.all([
         refreshHealth(),
+        refreshAuth(),
         refreshTasks(),
         refreshMemories(),
         refreshConversations(),
+        refreshIntegrations(),
+        refreshApprovals(),
       ]);
       setBackendError(null);
     } catch (err) {
@@ -51,7 +88,15 @@ export function useLifeDeskData() {
           : "Unable to communicate with the LifeDesk AI backend.";
       setBackendError(msg);
     }
-  }, [refreshConversations, refreshHealth, refreshMemories, refreshTasks]);
+  }, [
+    refreshApprovals,
+    refreshAuth,
+    refreshConversations,
+    refreshHealth,
+    refreshIntegrations,
+    refreshMemories,
+    refreshTasks,
+  ]);
 
   useEffect(() => {
     void refreshAll();
@@ -62,12 +107,22 @@ export function useLifeDeskData() {
     taskCounts,
     memories,
     conversations,
+    integrations,
+    oauthConfigured,
+    encryptionConfigured,
+    approvals,
+    pendingApprovalCount,
+    currentUser,
+    users,
     health,
     backendError,
     setBackendError,
     refreshTasks,
     refreshMemories,
     refreshConversations,
+    refreshIntegrations,
+    refreshApprovals,
+    refreshAuth,
     refreshHealth,
     refreshAll,
   };

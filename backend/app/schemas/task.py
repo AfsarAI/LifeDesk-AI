@@ -140,3 +140,48 @@ class TaskListResponse(BaseModel):
     count: int
     pending_count: int
     completed_count: int
+
+
+class CreateReminderArgs(BaseModel):
+    """Validated tool arguments for `create_reminder`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(..., min_length=1, max_length=200)
+    remind_at: str = Field(..., min_length=1, max_length=100)
+    task_id: int | None = Field(default=None, ge=1)
+
+    @field_validator("title", "remind_at")
+    @classmethod
+    def validate_non_blank(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Field cannot be empty.")
+        return cleaned
+
+
+class ListRemindersArgs(BaseModel):
+    """Validated tool arguments for `list_reminders`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["pending", "triggered", "dismissed"] | None = Field(default=None)
+
+
+class ReminderOut(BaseModel):
+    """Serialized reminder response."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    task_id: int | None = None
+    title: str
+    remind_at: str
+    status: str
+    created_at: datetime
+
+
+class GetUserPreferencesArgs(BaseModel):
+    """Validated tool arguments for `get_user_preferences`."""
+
+    model_config = ConfigDict(extra="forbid")

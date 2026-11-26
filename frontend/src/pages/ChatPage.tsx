@@ -4,38 +4,55 @@ import {
   Bot,
   Loader2,
   PanelRightOpen,
+  Plug,
   Send,
   Sparkles,
   User,
   X,
 } from "lucide-react";
+import { ApprovalCard } from "../components/ApprovalCard";
 import { ToolCallList } from "../components/ToolCallList";
-import type { ChatMessage } from "../types/api";
+import type { Approval, ChatMessage } from "../types/api";
 
 interface ChatPageProps {
   messages: ChatMessage[];
+  pendingApprovals: Approval[];
+  recentApprovals: Approval[];
   isLoading: boolean;
   error: string | null;
   onDismissError: () => void;
   onSendMessage: (message: string) => Promise<void>;
+  onApproveAction: (approvalId: number) => Promise<void>;
+  onRejectAction: (approvalId: number) => Promise<void>;
+  onEditDraftApproval: (
+    approval: Approval,
+    edited: { to: string; subject: string; body: string }
+  ) => Promise<void>;
+  onOpenIntegrations: () => void;
   showContextToggle: boolean;
   onShowContext: () => void;
 }
 
 const STARTER_PROMPTS = [
+  "Give me my daily briefing.",
+  "Find the email from Rahul about tomorrow's meeting and add it to my calendar.",
+  "Draft a reply to Rahul confirming the meeting.",
+  "Schedule my pending tasks across my free time tomorrow.",
   "Create a task called Complete my DSA assignment.",
-  "Show all my pending tasks.",
-  "Mark task 1 as completed.",
-  "Remember that I prefer afternoon meetings.",
-  "What do you remember about my preferences?",
 ];
 
 export function ChatPage({
   messages,
+  pendingApprovals,
+  recentApprovals,
   isLoading,
   error,
   onDismissError,
   onSendMessage,
+  onApproveAction,
+  onRejectAction,
+  onEditDraftApproval,
+  onOpenIntegrations,
   showContextToggle,
   onShowContext,
 }: ChatPageProps) {
@@ -43,10 +60,14 @@ export function ChatPage({
   const endRef = useRef<HTMLDivElement | null>(null);
 
   const visibleMessages = messages.filter((m) => m.role === "user" || m.role === "assistant");
+  const displayedApprovals = [
+    ...pendingApprovals,
+    ...recentApprovals.filter((r) => !pendingApprovals.some((p) => p.id === r.id)),
+  ].slice(0, 5);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [visibleMessages.length, isLoading]);
+  }, [visibleMessages.length, displayedApprovals.length, isLoading]);
 
   async function handleSubmit() {
     const trimmed = input.trim();
@@ -61,7 +82,7 @@ export function ChatPage({
         <div>
           <h2 className="text-sm font-semibold text-white">Assistant Chat</h2>
           <p className="text-xs text-slate-400">
-            Natural-language task management & persistent memory
+            Tasks, Memory, Gmail & Google Calendar with human approval gates
           </p>
         </div>
         {showContextToggle && (
@@ -80,6 +101,16 @@ export function ChatPage({
         <div className="mx-5 mt-3 flex items-start gap-2.5 rounded-xl border border-rose-500/40 bg-rose-950/50 px-3.5 py-2.5 text-xs text-rose-200">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-rose-400" />
           <span className="flex-1">{error}</span>
+          {error.toLowerCase().includes("connect") && (
+            <button
+              type="button"
+              onClick={onOpenIntegrations}
+              className="inline-flex items-center gap-1 rounded-lg bg-indigo-600 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-indigo-500"
+            >
+              <Plug className="h-3 w-3" />
+              Integrations
+            </button>
+          )}
           <button
             type="button"
             onClick={onDismissError}
@@ -92,15 +123,15 @@ export function ChatPage({
       )}
 
       <div className="flex-1 space-y-5 overflow-y-auto px-5 py-5">
-        {visibleMessages.length === 0 ? (
+        {visibleMessages.length === 0 && displayedApprovals.length === 0 ? (
           <div className="mx-auto flex max-w-2xl flex-col items-center justify-center py-12 text-center">
             <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-500/15 text-indigo-400 ring-1 ring-indigo-500/30">
               <Sparkles className="h-6 w-6" />
             </div>
-            <h3 className="text-lg font-semibold text-white">What would you like to get done?</h3>
+            <h3 className="text-lg font-semibold text-white">Your Personal AI Chief of Staff</h3>
             <p className="mt-1.5 max-w-md text-sm text-slate-400">
-              Ask LifeDesk AI to create, update, search, or complete tasks—or save preferences to
-              long-term memory.
+              Coordinate Gmail, Google Calendar, tasks, and long-term memory—with explicit approval
+              before sending emails or modifying calendar events.
             </p>
             <div className="mt-6 flex flex-wrap justify-center gap-2">
               {STARTER_PROMPTS.map((prompt) => (
@@ -137,7 +168,12 @@ export function ChatPage({
                         : "border border-slate-800 bg-slate-900/90 text-slate-100"
                     }`}
                   >
-                    {!isUser && <ToolCallList toolCalls={msg.tool_calls} />}
+                    {!isUser && (
+                      <ToolCallList
+                        toolCalls={msg.tool_calls}
+                        onOpenIntegrations={onOpenIntegrations}
+                      />
+                    )}
                     <p className="whitespace-pre-wrap">{msg.content}</p>
                   </div>
                   {isUser && (
@@ -149,13 +185,27 @@ export function ChatPage({
               );
             })}
 
+            {displayedApprovals.length > 0 && (
+              <div className="space-y-3 pt-2">
+                {displayedApprovals.map((approval) => (
+                  <ApprovalCard
+                    key={approval.id}
+                    approval={approval}
+                    onApprove={onApproveAction}
+                    onReject={onRejectAction}
+                    onEditDraft={onEditDraftApproval}
+                  />
+                ))}
+              </div>
+            )}
+
             {isLoading && (
               <div className="flex items-center gap-3">
                 <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-indigo-500/20 text-indigo-300 ring-1 ring-indigo-500/30">
                   <Loader2 className="h-4 w-4 animate-spin" />
                 </div>
                 <div className="rounded-2xl border border-slate-800 bg-slate-900/90 px-4 py-3 text-xs text-slate-300">
-                  Agent is thinking and executing any required tools...
+                  Agent is orchestrating native and MCP tools...
                 </div>
               </div>
             )}

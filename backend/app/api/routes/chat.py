@@ -7,7 +7,9 @@ from app.agent.agent import AgentExecutionError, ConversationNotFoundError, Life
 from app.agent.llm_provider import LLMConfigurationError, LLMProviderError
 from app.config import Settings, get_settings
 from app.database.database import get_db
+from app.database.models import User
 from app.schemas.chat import ChatRequest, ChatResponse
+from app.security.auth import get_current_user, sensitive_rate_limiter
 
 router = APIRouter(tags=["Chat"])
 
@@ -20,15 +22,18 @@ def get_agent(settings: Settings = Depends(get_settings)) -> LifeDeskAgent:
 @router.post("/chat", response_model=ChatResponse)
 def chat(
     payload: ChatRequest,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     agent: LifeDeskAgent = Depends(get_agent),
 ) -> ChatResponse:
-    """Process a user message through the multi-tool LifeDesk agent."""
+    """Process a user message through the unified native + MCP agent."""
+    sensitive_rate_limiter.check(f"chat:{current_user.id}")
     try:
         return agent.run(
             db,
             user_message=payload.message,
             conversation_id=payload.conversation_id,
+            user=current_user,
         )
     except ConversationNotFoundError as exc:
         raise HTTPException(
